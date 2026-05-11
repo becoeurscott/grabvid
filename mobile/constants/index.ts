@@ -119,7 +119,7 @@ export interface DownloadRecord {
 // ─── API Config ──────────────────────────────────────────────
 export const API_CONFIG = {
   // VPS Production server route
-  baseURL: 'http://157.173.210.2:8000', 
+  baseURL: 'https://api.grabvid.io', 
   timeout: 90000, // 90 seconds
   downloadTimeout: 600000, // 10 minutes
 };
