@@ -37,4 +37,5 @@ backend/*.txt
 web/node_modules/
 web/dist/
 web/.env*
+!web/.env.production
 web/*.zip
