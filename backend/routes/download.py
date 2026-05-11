@@ -6,11 +6,27 @@ Supports both POST (JSON body) and GET (query params) for mobile compatibility.
 import os
 import shutil
 import logging
+import hashlib
+import time
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from models.schemas import DownloadRequest, ErrorResponse
-from services.media_extractor import download_media, _classify_error
+from services.media_extractor import download_media, _classify_error, _get_file_info_by_ext
 from services.platform_detector import detect_platform
+
+CACHE_DIR = os.path.join(os.getcwd(), "cache")
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def _cleanup_cache():
+    """Delete cached files older than 1 hour to save storage space."""
+    now = time.time()
+    for f in os.listdir(CACHE_DIR):
+        fpath = os.path.join(CACHE_DIR, f)
+        if os.path.isfile(fpath) and os.stat(fpath).st_mtime < now - 3600:
+            try:
+                os.remove(fpath)
+            except Exception:
+                pass
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +78,40 @@ async def _do_download(url: str, format_id: str):
     # Detect platform for richer error info
     platform = detect_platform(url)
     
+    # Clean up old cache
+    _cleanup_cache()
+    
+    # Check Cache
+    url_hash = hashlib.md5(f"{url}_{format_id}".encode()).hexdigest()
+    cached_files = [f for f in os.listdir(CACHE_DIR) if f.startswith(url_hash + "_")]
+    
+    if cached_files:
+        cached_filename = cached_files[0]
+        file_path = os.path.join(CACHE_DIR, cached_filename)
+        # Reconstruct original filename from cache name: {hash}_{filename}
+        filename = cached_filename[len(url_hash) + 1:]
+        ext = filename.split(".")[-1] if "." in filename else "mp4"
+        _, content_type = _get_file_info_by_ext(ext)
+        
+        file_size = os.path.getsize(file_path)
+        logger.info(f"Serving {url} from CACHE!")
+        
+        def iterfile_cached():
+            with open(file_path, "rb") as f:
+                while chunk := f.read(8192):
+                    yield chunk
+                    
+        return StreamingResponse(
+            iterfile_cached(),
+            media_type=content_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(file_size),
+                "X-File-Name": filename,
+                "Accept-Ranges": "bytes",
+            },
+        )
+    
     try:
         file_path, filename, content_type = await download_media(url, format_id)
     except Exception as e:
@@ -91,13 +141,18 @@ async def _do_download(url: str, format_id: str):
             detail={"error": "file_not_found", "message": "Downloaded file was not found."},
         )
     
-    file_size = os.path.getsize(file_path)
+    # Move to cache
+    cached_filename = f"{url_hash}_{filename}"
+    cached_filepath = os.path.join(CACHE_DIR, cached_filename)
+    shutil.move(file_path, cached_filepath)
+    
     temp_dir = os.path.dirname(file_path)
+    file_size = os.path.getsize(cached_filepath)
     
     def iterfile():
         """Stream file in chunks and clean up after."""
         try:
-            with open(file_path, "rb") as f:
+            with open(cached_filepath, "rb") as f:
                 while chunk := f.read(8192):
                     yield chunk
         finally:

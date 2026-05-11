@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from 'expo-router';
+// import { BannerAd, BannerAdSize, TestIds } from 'react-native-google-mobile-ads';
 
 import { Colors, DownloadRecord, PLATFORMS } from '../../constants';
 import { getDownloadHistory, clearDownloadHistory, deleteDownloadRecord } from '../../services/storage';
@@ -143,6 +144,15 @@ export default function HistoryScreen() {
           showsVerticalScrollIndicator={false}
         />
       )}
+      
+      {/* Banner Ad at bottom of history */}
+      {/* <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+        <BannerAd
+          unitId={'ca-app-pub-3132858571697197/6840991115'}
+          size={BannerAdSize.BANNER}
+          requestOptions={{ requestNonPersonalizedAdsOnly: true }}
+        />
+      </View> */}
     </View>
   );
 }

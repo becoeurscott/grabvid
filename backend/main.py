@@ -5,6 +5,7 @@ FastAPI application for media analysis and download.
 import os
 import base64
 import logging
+import tempfile
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes.analyze import router as analyze_router
@@ -44,8 +45,8 @@ async def startup_event():
     This allows yt-dlp to authenticate across multiple platforms (YouTube, Instagram, etc)
     without storing cookies in the repo.
     """
-    platforms = ["YOUTUBE", "INSTAGRAM", "SNAPCHAT", "TIKTOK"]
-    cookies_path = "/tmp/cookies.txt"
+    platforms = ["YOUTUBE", "INSTAGRAM", "SNAPCHAT", "TIKTOK", "PINTEREST"]
+    cookies_path = os.path.join(tempfile.gettempdir(), "grabvid_cookies.txt")
     
     # Clear any old cookies file
     if os.path.exists(cookies_path):
@@ -58,29 +59,62 @@ async def startup_event():
         env_var = f"{platform}_COOKIES_BASE64"
         cookies_b64 = os.getenv(env_var)
         
+        cookies_data = None
         if cookies_b64:
             try:
                 cookies_data = base64.b64decode(cookies_b64)
-                # Ensure the file starts with the Netscape header if it's the first one,
-                # though yt-dlp is usually forgiving if the header is there somewhere.
+            except Exception as e:
+                logger.error(f"Failed to decode {platform} cookies from ENV: {e}")
+        else:
+            # Fallback: check for local files like yt_cookies.txt or ig_cookies.txt
+            # Try full name first, then common abbreviations
+            variations = [f"{platform.lower()}_cookies.txt", f"{platform.lower()[:2]}_cookies.txt"]
+            # Handle special cases
+            if platform == "YOUTUBE": variations.append("yt_cookies.txt")
+            if platform == "INSTAGRAM": variations.append("ig_cookies.txt")
+            if platform == "PINTEREST": variations.append("pin_cookies.txt")
+
+            for local_filename in variations:
+                # Check root directory (one level up from backend)
+                root_path = os.path.join(os.path.dirname(os.getcwd()), local_filename)
+                # Check current directory (backend)
+                local_path = os.path.join(os.getcwd(), local_filename)
+                
+                target_path = root_path if os.path.exists(root_path) else local_path
+                
+                if os.path.exists(target_path):
+                    try:
+                        with open(target_path, "rb") as f:
+                            cookies_data = f.read()
+                        logger.info(f"Loaded {platform} cookies from: {target_path}")
+                        break # Found it
+                    except Exception as e:
+                        logger.error(f"Failed to read cookie file {target_path}: {e}")
+
+        if cookies_data:
+            try:
                 if not combined_cookies_data and not cookies_data.startswith(b"# Netscape"):
                     combined_cookies_data += b"# Netscape HTTP Cookie File\n\n"
                     
                 combined_cookies_data += cookies_data + b"\n\n"
                 loaded_platforms.append(platform)
             except Exception as e:
-                logger.error(f"Failed to decode {platform} cookies: {e}")
+                logger.error(f"Failed to process {platform} cookies: {e}")
     
     if combined_cookies_data:
         try:
             with open(cookies_path, "wb") as f:
                 f.write(combined_cookies_data)
             os.environ["COOKIES_FILE"] = cookies_path
-            logger.info(f"Successfully loaded cookies for: {', '.join(loaded_platforms)} ({len(combined_cookies_data)} bytes)")
+            msg = f"Successfully loaded cookies for: {', '.join(loaded_platforms)} ({len(combined_cookies_data)} bytes)"
+            logger.info(msg)
+            print(f"STARTUP: {msg}")
         except Exception as e:
             logger.error(f"Failed to write combined cookies file: {e}")
+            print(f"STARTUP ERROR: Failed to write cookies: {e}")
     else:
         logger.info("No cookie env vars set — private videos will fail")
+        print("STARTUP: No cookie env vars set")
 
 
 if __name__ == "__main__":

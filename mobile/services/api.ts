@@ -18,6 +18,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   FORBIDDEN: 'Platform blocked the request. Try again later.',
   RATE_LIMITED: 'Too many requests. Please wait a moment and try again.',
   UNSUPPORTED: 'This URL or format is not supported.',
+  BOT_DETECTED: 'Platform detected automated traffic. Try again later or with a different link.',
 };
 
 /**
@@ -84,7 +85,7 @@ export async function analyzeURL(url: string): Promise<AnalyzeResponse> {
 export async function downloadMedia(
   url: string,
   formatId: string,
-  onProgress: (progress: number) => void,
+  onProgress: (progress: number, writtenBytes: number, totalBytes: number) => void,
 ): Promise<string> {
   let normalizedUrl = url.trim();
   if (!normalizedUrl.startsWith('http://') && !normalizedUrl.startsWith('https://')) {
@@ -107,7 +108,7 @@ export async function downloadMedia(
     (downloadProgress) => {
       if (downloadProgress.totalBytesExpectedToWrite > 0) {
         const progress = downloadProgress.totalBytesWritten / downloadProgress.totalBytesExpectedToWrite;
-        onProgress(Math.min(progress, 1));
+        onProgress(Math.min(progress, 1), downloadProgress.totalBytesWritten, downloadProgress.totalBytesExpectedToWrite);
       }
     },
   );
@@ -149,7 +150,7 @@ export async function downloadMedia(
       }
     }
 
-    onProgress(1);
+    onProgress(1, 0, 0);
     return result.uri;
   } catch (err: any) {
     // Clean up partial file
@@ -161,6 +162,7 @@ export async function downloadMedia(
 // ─── Helpers ─────────────────────────────────────────────────
 
 function getExtension(formatId: string): string {
+  if (formatId === 'thumbnail') return 'jpg';
   if (formatId.includes('mp4') || formatId.includes('video')) return 'mp4';
   if (formatId.includes('mp3') || formatId === 'mp3_audio') return 'mp3';
   if (formatId === 'wav') return 'wav';

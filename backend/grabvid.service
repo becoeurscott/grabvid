@@ -1,0 +1,24 @@
+[Unit]
+Description=GrabVid FastAPI Backend
+After=network.target
+
+[Service]
+# Change 'root' to your VPS username if you are not using root
+User=root
+Group=www-data
+
+# Change this to the actual path where you upload the backend folder
+WorkingDirectory=/root/grabvid/backend
+
+# We assume you use a virtual environment. If not, change to /usr/bin/python3
+ExecStart=/root/grabvid/backend/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+
+Restart=always
+RestartSec=5
+
+# Environment variables for cookies and other config
+# You can also use an .env file
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

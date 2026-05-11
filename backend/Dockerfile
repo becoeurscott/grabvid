@@ -1,9 +1,12 @@
 FROM python:3.12-slim
 
-# Install ffmpeg for media processing + cron for yt-dlp auto-updates
+# Install ffmpeg for media processing + cron for yt-dlp auto-updates + nodejs for yt-dlp JS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     cron \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -24,6 +24,14 @@ import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
+// import { BannerAd, BannerAdSize, InterstitialAd, AdEventType } from 'react-native-google-mobile-ads';
+import { useShareIntent } from 'expo-share-intent';
+
+// const REAL_INTERSTITIAL_ID = 'ca-app-pub-3132858571697197/6813815813';
+// const REAL_BANNER_ID = 'ca-app-pub-3132858571697197/6840991115';
+// const interstitial = InterstitialAd.createForAdRequest(REAL_INTERSTITIAL_ID, {
+//   requestNonPersonalizedAdsOnly: true,
+// });
 
 import {
   Colors,
@@ -66,6 +74,8 @@ export default function DownloadScreen() {
   const [analyzeResult, setAnalyzeResult] = useState<AnalyzeResponse | null>(null);
   const [selectedFormat, setSelectedFormat] = useState<FormatInfo | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
+  const [downloadWritten, setDownloadWritten] = useState(0);
+  const [downloadTotal, setDownloadTotal] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
 
   // Reset to idle when user comes back to this tab
@@ -76,6 +86,27 @@ export default function DownloadScreen() {
       }
     }, [appState])
   );
+
+  // Handle incoming shared links
+  const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntent();
+
+  React.useEffect(() => {
+    if (hasShareIntent && shareIntent.value) {
+      // The shared value might be text containing a URL or just the URL
+      const text = shareIntent.value;
+      const urlMatch = text.match(/(https?:\/\/[^\s]+)/g);
+      const extractedUrl = urlMatch ? urlMatch[0] : text;
+      
+      setUrlText(extractedUrl);
+      
+      // We manually invoke the platform detector so the UI updates
+      const platform = detectPlatform(extractedUrl);
+      setDetectedPlatform(platform);
+      
+      resetShareIntent();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  }, [hasShareIntent, shareIntent, resetShareIntent]);
 
   // ─── Animations ───────────────────────────────────────────
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -115,12 +146,24 @@ export default function DownloadScreen() {
 
   const isValidUrl = urlText.trim().length > 5 && urlText.includes('.');
 
+  React.useEffect(() => {
+    // Load the interstitial ad when the screen mounts
+    // interstitial.load();
+    // 
+    // const unsubscribe = interstitial.addAdEventListener(AdEventType.CLOSED, () => {
+    //   interstitial.load(); // Reload for the next time
+    // });
+    // return unsubscribe;
+  }, []);
+
   const handleFetch = async () => {
     if (!isValidUrl) return;
     setAppState('analyzing');
     setAnalyzeResult(null);
     setSelectedFormat(null);
     setDownloadProgress(0);
+    setDownloadWritten(0);
+    setDownloadTotal(0);
     setErrorMessage('');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
@@ -152,8 +195,10 @@ export default function DownloadScreen() {
 
     try {
       // Step 1: Download the file via expo-file-system
-      const filePath = await downloadMedia(urlText, selectedFormat.format_id, (progress) => {
+      const filePath = await downloadMedia(urlText, selectedFormat.format_id, (progress, written, total) => {
         setDownloadProgress(progress);
+        setDownloadWritten(written);
+        setDownloadTotal(total);
       });
 
       // Step 2: Save to history FIRST (this should always work)
@@ -185,6 +230,11 @@ export default function DownloadScreen() {
       setAppState('completed');
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
+      // Show interstitial ad if it's loaded
+      // if (interstitial.loaded) {
+      //   interstitial.show();
+      // }
+
       // Auto-navigate to History tab after a brief moment
       setTimeout(() => {
         router.push('/(tabs)/history');
@@ -202,6 +252,8 @@ export default function DownloadScreen() {
     setAnalyzeResult(null);
     setSelectedFormat(null);
     setDownloadProgress(0);
+    setDownloadWritten(0);
+    setDownloadTotal(0);
     setDetectedPlatform(null);
     setErrorMessage('');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -324,10 +376,20 @@ export default function DownloadScreen() {
           </Animated.View>
         )}
         {appState === 'downloading' && (
-          <DownloadProgressView progress={downloadProgress} accentColor={accentColor} />
+          <DownloadProgressView progress={downloadProgress} written={downloadWritten} total={downloadTotal} accentColor={accentColor} />
         )}
         {appState === 'completed' && <CompletedView onReset={handleReset} />}
         {appState === 'error' && <ErrorView message={errorMessage} onRetry={handleFetch} />}
+
+        {/* <View style={{ alignItems: 'center', marginTop: 30, marginBottom: 10 }}>
+          <BannerAd
+            unitId={REAL_BANNER_ID}
+            size={BannerAdSize.BANNER}
+            requestOptions={{
+              requestNonPersonalizedAdsOnly: true,
+            }}
+          />
+        </View> */}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -478,14 +540,23 @@ function FormatSelectionList({
   );
 }
 
-function DownloadProgressView({ progress, accentColor }: { progress: number; accentColor: string }) {
+function DownloadProgressView({ progress, written, total, accentColor }: { progress: number; written: number; total: number; accentColor: string }) {
+  const formatSize = (bytes: number) => {
+    if (!bytes) return '0 mo';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' mo';
+  };
   return (
     <View style={styles.progressCard}>
       <Text style={styles.stateTitle}>Downloading...</Text>
       <View style={styles.progressBarBg}>
         <View style={[styles.progressBarFill, { width: `${progress * 100}%`, backgroundColor: accentColor }]} />
       </View>
-      <Text style={styles.progressPercent}>{Math.round(progress * 100)}%</Text>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+        <Text style={styles.progressPercent}>{Math.round(progress * 100)}%</Text>
+        <Text style={{ color: '#888', fontSize: 16, marginTop: 12, fontVariant: ['tabular-nums'] }}>
+          {formatSize(written)} / {formatSize(total)}
+        </Text>
+      </View>
     </View>
   );
 }

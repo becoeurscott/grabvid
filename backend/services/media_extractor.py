@@ -51,8 +51,11 @@ def _classify_error(error_msg: str) -> dict:
     if any(k in msg for k in ["429", "too many", "rate limit", "throttl"]):
         return {"code": "RATE_LIMITED", "error": "Too many requests. Please wait a moment and try again."}
 
-    if any(k in msg for k in ["unsupported", "not supported", "no suitable"]):
+    if any(k in msg for k in ["unsupported", "not supported", "no suitable", "requested format is not available"]):
         return {"code": "UNSUPPORTED", "error": "This URL or format is not supported."}
+    
+    if any(k in msg for k in ["sign in to confirm you are not a bot", "bot detection", "automated requests"]):
+        return {"code": "FORBIDDEN", "error": "Platform detected automated traffic. Try again with a different format or later."}
 
     # Generic fallback
     return {"code": "UNKNOWN", "error": str(error_msg)}
@@ -174,7 +177,7 @@ async def analyze_url(url: str) -> AnalyzeResponse:
         "geo_bypass": True,
         "age_limit": 100,
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         },
     }
@@ -242,10 +245,47 @@ def _extract_info(url: str, opts: dict) -> dict:
 def _build_formats(platform: Platform, info: dict) -> list[FormatInfo]:
     """Build format list from platform config and actual yt-dlp data."""
     platform_formats = _get_platform_formats(platform)
+    
+    # Always allow downloading the thumbnail regardless of platform
+    platform_formats.append({
+        "format_id": "thumbnail", 
+        "label": "Download Thumbnail", 
+        "type": MediaType.IMAGE, 
+        "quality": "HD", 
+        "ext": "jpg"
+    })
+    
     ydl_formats = info.get("formats", [])
+    has_video = False
+    for f in ydl_formats:
+        vcodec = f.get("vcodec")
+        if vcodec != "none" and vcodec is not None:
+            has_video = True
+        if f.get("ext") in ("mp4", "webm"):
+            has_video = True
+            
+    is_image_only = not has_video
+    
+    max_height = 0
+    for f in ydl_formats:
+        h = f.get("height", 0) or 0
+        if h > max_height:
+            max_height = h
     
     result = []
     for pf in platform_formats:
+        # Smart filtering to prevent offering image formats on video posts, and vice versa
+        if pf["type"] == MediaType.IMAGE and not is_image_only and pf["format_id"] != "thumbnail":
+            continue
+        if pf["type"] in (MediaType.VIDEO, MediaType.AUDIO) and is_image_only:
+            continue
+            
+        # Skip video resolutions that are higher than the actual source video
+        if pf["type"] == MediaType.VIDEO and max_height > 0:
+            target_height = pf.get("height", 0)
+            if target_height > 0 and target_height > max_height + 60:
+                continue
+            
         # Try to estimate file size from yt-dlp format data
         estimated_bytes = _estimate_size(pf, ydl_formats, info)
         
@@ -260,6 +300,17 @@ def _build_formats(platform: Platform, info: dict) -> list[FormatInfo]:
             has_watermark=pf.get("has_watermark"),
         )
         result.append(format_info)
+        
+    # Enforce realistic scaling: Higher resolutions should always be larger than lower resolutions
+    # result is ordered descending (1080p -> 720p -> 480p)
+    for i in range(len(result) - 2, -1, -1):
+        curr = result[i]
+        lower = result[i+1]
+        if curr.type == MediaType.VIDEO and lower.type == MediaType.VIDEO:
+            if curr.estimated_size_bytes < lower.estimated_size_bytes:
+                # Estimate it realistically based on the lower resolution's actual bloated size
+                curr.estimated_size_bytes = int(lower.estimated_size_bytes * 1.4)
+                curr.estimated_size = _format_size(curr.estimated_size_bytes)
     
     return result
 
@@ -271,13 +322,19 @@ def _estimate_size(platform_format: dict, ydl_formats: list, info: dict) -> int:
     duration = info.get("duration", 0) or 0
     
     if media_type == MediaType.VIDEO and target_height:
-        # Find closest matching video format
+        # Find the largest stream matching this resolution
+        best_size = 0
         for fmt in ydl_formats:
             height = fmt.get("height", 0) or 0
             if abs(height - target_height) <= 60:
                 filesize = fmt.get("filesize") or fmt.get("filesize_approx")
-                if filesize:
-                    return int(filesize)
+                if filesize and int(filesize) > best_size:
+                    best_size = int(filesize)
+        
+        if best_size > 0:
+            # Add audio size estimate (128kbps = 16KB/s) since we merge streams
+            audio_size = int(16 * 1024 * duration) if duration > 0 else (2 * 1024 * 1024)
+            return best_size + audio_size
         
         # Estimate based on bitrate and duration
         bitrate_map = {1080: 4000, 720: 2500, 480: 1000}
@@ -329,7 +386,12 @@ async def download_media(url: str, format_id: str) -> tuple[str, str, str]:
 
     # Add a Referer header – many platforms (Instagram, TikTok, Snapchat) require it
     ydl_opts.setdefault('http_headers', {})
-    ydl_opts['http_headers']['Referer'] = url
+    if platform == Platform.TIKTOK:
+        ydl_opts['http_headers']['Referer'] = 'https://www.tiktok.com/'
+    elif platform == Platform.INSTAGRAM:
+        ydl_opts['http_headers']['Referer'] = 'https://www.instagram.com/'
+    else:
+        ydl_opts['http_headers']['Referer'] = url
     
     # Proceed with download as before
     try:
@@ -379,36 +441,49 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
         "max_filesize": MAX_DOWNLOAD_SIZE,
         "geo_bypass": True,
         "age_limit": 100,
+        "updatetime": False,
+        "format_sort": ["vcodec:h264", "ext:mp4:m4a"],
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9",
         },
     }
-    
-    # Platform‑specific fallback – these services provide combined streams, so use the generic 'best'
-    if platform in (Platform.INSTAGRAM, Platform.SNAPCHAT, Platform.TIKTOK):
-        base_opts["format"] = "best"
-        return base_opts
 
+    # Find ffmpeg for local Windows environments
+    if os.name == 'nt':
+        local_ffmpeg = os.path.join(os.getcwd(), "ffmpeg.exe")
+        if os.path.exists(local_ffmpeg):
+            base_opts["ffmpeg_location"] = local_ffmpeg
+
+    # Add YouTube extractor args to bypass blocks
     if platform == Platform.YOUTUBE:
-        base_opts["extractor_args"] = {"youtube": ["player_client=android"]}
-
+        base_opts["extractor_args"] = {"youtube": ["player_client=android,ios,mweb"]}
     
+    # Add proxy if available
+    proxy = os.getenv("HTTP_PROXY") or os.getenv("http_proxy") or os.getenv("PROXY")
+    if proxy:
+        base_opts["proxy"] = proxy
     if format_id.startswith("mp4_"):
-        # Video formats
-        if "1080" in format_id:
+        # Video formats: Relax strict MP4 check, format_sort and postprocessors will handle remuxing
+        if platform in (Platform.INSTAGRAM, Platform.SNAPCHAT, Platform.TIKTOK):
+            base_opts["format"] = "best"
+        elif "1080" in format_id:
             base_opts["format"] = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"
         elif "720" in format_id:
             base_opts["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
         elif "480" in format_id:
             base_opts["format"] = "bestvideo[height<=480]+bestaudio/best[height<=480]/best"
         elif "sd" in format_id:
-            base_opts["format"] = "worst[ext=mp4]/worst/best"
+            base_opts["format"] = "worst[ext=mp4]/worst"
         else:
             # hd, no_watermark, watermark, video, best — all grab best available
-            base_opts["format"] = "best[ext=mp4]/best"
+            base_opts["format"] = "bestvideo+bestaudio/best"
         
         base_opts["merge_output_format"] = "mp4"
+        base_opts["postprocessors"] = [{
+            "key": "FFmpegVideoConvertor",
+            "preferedformat": "mp4"
+        }]
         
     elif format_id.startswith("mp3_") or format_id == "mp3_audio":
         base_opts["format"] = "bestaudio/best"
@@ -436,6 +511,14 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
         
     elif format_id.startswith("jpeg_") or format_id == "gif":
         base_opts["format"] = "best"
+        
+    elif format_id == "thumbnail":
+        base_opts["skip_download"] = True
+        base_opts["writethumbnail"] = True
+        base_opts["postprocessors"] = [{
+            "key": "FFmpegThumbnailsConvertor",
+            "format": "jpg",
+        }]
     
     else:
         base_opts["format"] = "best"

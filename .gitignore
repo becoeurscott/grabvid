@@ -13,12 +13,28 @@ backend/venv/
 backend/.env
 backend/tmp/
 backend/grabvid_downloads/
+backend/cache/
 
 # OS
 .DS_Store
 Thumbs.db
 
-# Build artifacts
-mobile/dist/
-mobile/.expo/
-mobile/node_modules/
+# Build artifacts & Binaries
+*.exe
+*.zip
+*.log
+*.bak
+backend/ffmpeg
+backend/ffprobe
+backend/ffplay
+
+# Sensitive data
+*_cookies.txt
+backend/*.txt
+!backend/requirements.txt
+
+# Web Project
+web/node_modules/
+web/dist/
+web/.env*
+web/*.zip

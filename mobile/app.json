@@ -20,7 +20,9 @@
         "NSPhotoLibraryAddUsageDescription": "GrabVid saves downloaded videos to your photo library.",
         "NSPhotoLibraryUsageDescription": "GrabVid needs photo library access to save media.",
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["fetch"],
+        "UIBackgroundModes": [
+          "fetch"
+        ],
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
         }
@@ -72,7 +74,21 @@
         "expo-sqlite",
         {}
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-3132858571697197~2606232639",
+          "iosAppId": "ca-app-pub-3132858571697197~2606232639"
+        }
+      ],
+      [
+        "expo-share-intent",
+        {
+          "ios": { "enabled": true },
+          "android": { "enabled": true }
+        }
+      ]
     ]
   }
 }
