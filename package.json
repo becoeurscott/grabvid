@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "install": "cd web && npm install",
-    "build": "cd web && npm run build",
+    "build": "cd web && npm run build && cp -r dist ../dist || xcopy dist ..\\dist\\ /E /I /Y",
     "start": "cd web && npm run start"
   }
 }
