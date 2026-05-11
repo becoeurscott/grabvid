@@ -1,0 +1,16 @@
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /
+
+# Redirect all requests to the dist folder
+RewriteCond %{REQUEST_URI} !^/dist/
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ /dist/$1 [L,QSA]
+
+# If the requested file doesn't exist in dist, route to index.html for React/Vite routing
+RewriteCond %{REQUEST_URI} ^/dist/
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ /dist/index.html [L,QSA]
+</IfModule>
