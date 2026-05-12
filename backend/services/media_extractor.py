@@ -1,12 +1,15 @@
 """
 Media extraction service using yt-dlp.
 Handles media analysis and download for all supported platforms.
+Also supports direct image URL downloads.
 """
 import os
 import re
 import asyncio
 import tempfile
 import logging
+import mimetypes
+from urllib.parse import urlparse, unquote
 from typing import Optional
 from models.schemas import (
     Platform, MediaType, FormatInfo, AnalyzeResponse,
@@ -15,6 +18,58 @@ from models.schemas import (
 from services.platform_detector import detect_platform
 
 logger = logging.getLogger(__name__)
+
+# Common image extensions for direct URL detection
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".ico", ".tiff", ".avif"}
+
+
+def _is_direct_image_url(url: str) -> bool:
+    """Check if a URL points directly to an image file."""
+    parsed = urlparse(url.lower().split('?')[0].split('#')[0])
+    path = unquote(parsed.path)
+    _, ext = os.path.splitext(path)
+    return ext in IMAGE_EXTENSIONS
+
+
+async def download_direct_image(url: str) -> tuple[str, str, str]:
+    """
+    Download an image directly from a URL using httpx.
+    Returns (file_path, filename, content_type).
+    """
+    import httpx
+
+    temp_dir = tempfile.mkdtemp(prefix="grabvid_img_")
+
+    # Extract filename from URL
+    parsed = urlparse(url)
+    path = unquote(parsed.path)
+    basename = os.path.basename(path) or "image.jpg"
+    # Clean the filename
+    safe_name = re.sub(r'[^\w\s.\-]', '', basename).strip()[:100]
+    if not safe_name:
+        safe_name = "image.jpg"
+
+    file_path = os.path.join(temp_dir, safe_name)
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "image/*,*/*;q=0.8",
+    }
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+
+        with open(file_path, "wb") as f:
+            f.write(response.content)
+
+    # Determine content type
+    content_type = response.headers.get("content-type", "").split(";")[0].strip()
+    if not content_type or content_type == "application/octet-stream":
+        guessed, _ = mimetypes.guess_type(safe_name)
+        content_type = guessed or "image/jpeg"
+
+    return file_path, safe_name, content_type
 
 MAX_DOWNLOAD_SIZE = int(os.getenv("MAX_DOWNLOAD_SIZE", str(2 * 1024 * 1024 * 1024)))  # 2GB
 DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "300"))
@@ -26,6 +81,10 @@ def _classify_error(error_msg: str) -> dict:
     The mobile app maps these codes to localized strings.
     """
     msg = str(error_msg).lower()
+
+    # Bot detection MUST come first (before "sign in" / "login" checks)
+    if any(k in msg for k in ["not a bot", "confirm you're not a bot", "confirm you are not a bot", "bot detection", "automated requests"]):
+        return {"code": "FORBIDDEN", "error": "Platform detected automated traffic. Please try again later or use a different video."}
 
     if any(k in msg for k in ["private", "is private", "private video"]):
         return {"code": "PRIVATE", "error": "This video is private. Only the owner can view it."}
@@ -53,9 +112,6 @@ def _classify_error(error_msg: str) -> dict:
 
     if any(k in msg for k in ["unsupported", "not supported", "no suitable", "requested format is not available"]):
         return {"code": "UNSUPPORTED", "error": "This URL or format is not supported."}
-    
-    if any(k in msg for k in ["sign in to confirm you are not a bot", "bot detection", "automated requests"]):
-        return {"code": "FORBIDDEN", "error": "Platform detected automated traffic. Try again with a different format or later."}
 
     # Generic fallback
     return {"code": "UNKNOWN", "error": str(error_msg)}
@@ -154,16 +210,73 @@ def _get_platform_formats(platform: Platform) -> list[dict]:
     ]
 
 
+async def _analyze_direct_image(url: str) -> AnalyzeResponse:
+    """Analyze a direct image URL and return download options."""
+    import httpx
+
+    parsed = urlparse(url)
+    path = unquote(parsed.path)
+    filename = os.path.basename(path) or "image"
+    ext = os.path.splitext(filename)[1].lstrip(".").lower() or "jpg"
+
+    # Do a HEAD request to get file size without downloading
+    estimated_size = 0
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15) as client:
+            resp = await client.head(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            content_length = resp.headers.get("content-length")
+            if content_length:
+                estimated_size = int(content_length)
+    except Exception:
+        estimated_size = 1 * 1024 * 1024  # Default 1MB
+
+    formats = [
+        FormatInfo(
+            format_id="direct_image",
+            label=f"{ext.upper()} Original",
+            type=MediaType.IMAGE,
+            quality="Original",
+            extension=ext,
+            estimated_size=_format_size(estimated_size) if estimated_size else "Unknown",
+            estimated_size_bytes=estimated_size,
+        ),
+    ]
+
+    return AnalyzeResponse(
+        platform=Platform.UNKNOWN,
+        platform_name="Direct Image",
+        platform_color="#6366F1",
+        title=filename,
+        thumbnail=url,
+        duration=None,
+        duration_formatted=None,
+        author=parsed.netloc,
+        formats=formats,
+    )
+
+
+
 async def analyze_url(url: str) -> AnalyzeResponse:
     """
     Analyze a URL and return platform info with available formats.
     Uses yt-dlp to extract metadata without downloading.
+    Also supports direct image URLs from any website.
     """
     import yt_dlp
 
+    # Check if this is a direct image URL first
+    if _is_direct_image_url(url):
+        return await _analyze_direct_image(url)
+
     platform = detect_platform(url)
     if platform == Platform.UNKNOWN:
-        raise ValueError("Unsupported platform. Please provide a URL from a supported platform.")
+        # Before giving up, try yt-dlp anyway — it supports 1000+ sites
+        try:
+            pass  # Fall through to the yt-dlp logic below
+        except Exception:
+            raise ValueError("Unsupported platform. Please provide a URL from a supported platform.")
 
     platform_info = PLATFORM_INFO.get(platform, {})
     
@@ -212,7 +325,9 @@ async def analyze_url(url: str) -> AnalyzeResponse:
     
     if info is None:
         logger.error(f"All yt-dlp attempts failed for {url}")
-        raise ValueError(f"Could not analyze this URL. The video may be private or require login.")
+        if last_error:
+            raise last_error
+        raise ValueError("Could not analyze this URL.")
 
     title = info.get("title", "Untitled")
     thumbnail = info.get("thumbnail")
@@ -367,11 +482,16 @@ def _estimate_size(platform_format: dict, ydl_formats: list, info: dict) -> int:
 async def download_media(url: str, format_id: str) -> tuple[str, str, str]:
     """
     Download media in the specified format.
+    Supports both yt-dlp platforms and direct image URLs.
     
     Returns:
         Tuple of (file_path, filename, content_type)
     """
     import yt_dlp
+
+    # Handle direct image downloads
+    if _is_direct_image_url(url) or format_id == "direct_image":
+        return await download_direct_image(url)
 
     platform = detect_platform(url)
     temp_dir = tempfile.mkdtemp(prefix="grabvid_")
@@ -465,7 +585,7 @@ def _build_download_opts(format_id: str, platform: Platform, output_dir: str) ->
         base_opts["proxy"] = proxy
     if format_id.startswith("mp4_"):
         # Video formats: Relax strict MP4 check, format_sort and postprocessors will handle remuxing
-        if platform in (Platform.INSTAGRAM, Platform.SNAPCHAT, Platform.TIKTOK):
+        if platform in (Platform.INSTAGRAM, Platform.SNAPCHAT):
             base_opts["format"] = "best"
         elif "1080" in format_id:
             base_opts["format"] = "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best"

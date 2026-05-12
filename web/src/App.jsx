@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Download, Shield, Zap, Info, Play, Music, Camera, AlertCircle, ExternalLink, Clapperboard } from 'lucide-react';
+import { Search, Download, Shield, Zap, Info, Play, Music, Camera, AlertCircle, ExternalLink, Clapperboard, ImageIcon } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { analyzeUrl } from './api';
 import './App.css';
@@ -43,6 +43,7 @@ function App() {
     if (lower.includes('youtube.com') || lower.includes('youtu.be')) return 'youtube';
     if (lower.includes('tiktok.com')) return 'tiktok';
     if (lower.includes('snapchat.com')) return 'snapchat';
+    if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|avif)(\?|$)/i.test(lower)) return 'image';
     return null;
   };
 
@@ -116,7 +117,7 @@ function App() {
             transition={{ delay: 0.2 }}
             className="hero-subtitle"
           >
-            High-speed, premium video downloader for Instagram, TikTok, YouTube, and more.
+            High-speed, premium video & image downloader for Instagram, TikTok, YouTube, and more.
           </motion.p>
 
           <motion.form 
@@ -159,6 +160,7 @@ function App() {
               <div className={`p-icon ${detectedPlatform === 'youtube' ? 'active' : ''}`} title="YouTube"><Play size={18} /></div>
               <div className={`p-icon ${detectedPlatform === 'tiktok' ? 'active' : ''}`} title="TikTok"><Music size={18} /></div>
               <div className={`p-icon ${detectedPlatform === 'snapchat' ? 'active' : ''}`} title="Snapchat"><Shield size={18} /></div>
+              <div className={`p-icon ${detectedPlatform === 'image' ? 'active' : ''}`} title="Direct Image"><ImageIcon size={18} /></div>
               <div className="p-icon" title="And more..."><Info size={18} /></div>
             </div>
           </motion.div>
