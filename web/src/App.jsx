@@ -12,12 +12,32 @@ const ReelsIcon = ({ size = 18 }) => (
   </svg>
 );
 
-const AdPlaceholder = ({ height = "90px", label = "Advertisement" }) => (
-  <div className="ad-slot" style={{ height }}>
-    <span className="ad-label">{label}</span>
-    {/* Google AdSense code would go here */}
-  </div>
-);
+const AdBanner = ({ style = {}, format = "auto", slot = "" }) => {
+  const adRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      if (adRef.current && window.adsbygoogle) {
+        (window.adsbygoogle = window.adsbygoogle || []).push({});
+      }
+    } catch (e) {
+      console.log('Ad load error:', e);
+    }
+  }, []);
+
+  return (
+    <div className="ad-slot" style={{ textAlign: 'center', margin: '1.5rem 0' }}>
+      <ins className="adsbygoogle"
+        ref={adRef}
+        style={{ display: 'block', ...style }}
+        data-ad-client="ca-pub-3132858571697197"
+        data-ad-slot={slot}
+        data-ad-format={format}
+        data-full-width-responsive="true"
+      />
+    </div>
+  );
+};
 
 function App() {
   const [url, setUrl] = useState('');
@@ -166,8 +186,8 @@ function App() {
           </motion.div>
         </section>
 
-        {/* Ad Placement Top */}
-        <AdPlaceholder height="120px" label="Banner Advertisement" />
+        {/* Google AdSense - Top Banner */}
+        <AdBanner format="horizontal" />
 
         {/* Error State */}
         <AnimatePresence>
@@ -253,8 +273,8 @@ function App() {
           </div>
         </section>
 
-        {/* Ad Placement Bottom */}
-        <AdPlaceholder height="250px" label="Responsive Display Ad" />
+        {/* Google AdSense - Bottom Display */}
+        <AdBanner format="auto" />
 
       </main>
 
